@@ -1,11 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import OpenDartReader
 import db_manager
-
-DART_API_KEY = 'c7701951' + 'd3927d434089d60e4a0590dc56dc047c'
-dart = OpenDartReader(DART_API_KEY)
 
 TARGET_STOCKS = {
     '마이크로컨텍솔': '098120', '티에스이': '131290', '티에프이': '425420', 'ISC': '095340',
@@ -20,7 +16,6 @@ st.set_page_config(page_title="소부장 트래킹 대시보드", layout="wide")
 
 def check_password():
     def password_entered():
-        # 기본 비밀번호는 0000 입니다. 원하시면 여기서 변경 가능합니다.
         if st.session_state["password"] == "0000": 
             st.session_state["password_correct"] = True
             del st.session_state["password"] 
@@ -42,7 +37,6 @@ if not check_password():
 
 st.title("📈 반도체 소부장 종목 트래킹 대시보드")
 
-# Sidebar
 st.sidebar.header("종목 선택")
 selected_company = st.sidebar.selectbox("종목을 선택하세요", list(TARGET_STOCKS.keys()))
 ticker = TARGET_STOCKS[selected_company]
@@ -86,19 +80,3 @@ if not df.empty:
         st.dataframe(df)
 else:
     st.warning("데이터베이스에 해당 종목의 데이터가 없습니다. 네이버나 텔레그램 트래커 스크립트를 먼저 실행해주세요.")
-
-st.subheader("📢 최근 공시 (DART)")
-try:
-    import datetime
-    today = datetime.datetime.today()
-    start_date = (today - datetime.timedelta(days=180)).strftime('%Y%m%d')
-    dart_df = dart.list(ticker, start=start_date) 
-    
-    if dart_df is not None and not dart_df.empty:
-        dart_df = dart_df[['rcept_dt', 'report_nm', 'flr_nm']]
-        dart_df.columns = ['접수일자', '보고서명', '제출인']
-        st.dataframe(dart_df.head(15), use_container_width=True)
-    else:
-        st.info("최근 6개월간 공시 내역이 없습니다.")
-except Exception as e:
-    st.error(f"공시 정보를 불러오는 중 에러가 발생했습니다: {e}")
