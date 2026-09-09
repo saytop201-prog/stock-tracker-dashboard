@@ -2,9 +2,4 @@ streamlit
 pandas
 plotly
 opendartreader
-google-generativeai
-pykrx
-pymupdf
-beautifulsoup4
-telethon
 openpyxl
