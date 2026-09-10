@@ -79,7 +79,8 @@ selected_company = st.sidebar.selectbox("종목을 선택하세요", list(TARGET
 ticker = TARGET_STOCKS[selected_company]
 
 st.header(f"[{ticker}] {selected_company}")
-now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+kst = datetime.timezone(datetime.timedelta(hours=9))
+now_str = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M")
 st.markdown(f"**🕒 Market data as of: {now_str} KST**")
 
 df_estimates = db_manager.get_historical_estimates(ticker)
@@ -88,41 +89,49 @@ df_financials = get_historical_financials(ticker)
 
 mcap, current_price = get_current_market_data(ticker)
 
-# --- 1. Top Summary Cards ---
-# 네이버 금융(df_financials) 컨센서스 기준 최우선 사용
-op26, op27, op28 = None, None, None
-eps26, eps27, eps28 = None, None, None
+# --- 1. Top Summary Cards (NTM & 분리된 컨센서스) ---
+op26_mkt, op27_mkt, eps26_mkt, eps27_mkt = None, None, None, None
+op28_single, eps28_single = None, None
 
 if not df_financials.empty:
     try:
-        # 네이버 금융의 26E, 27E, 28E 파싱
         for col in df_financials.columns:
             if '2026' in col and '(E)' in col:
-                op26 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
-                eps26 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+                op26_mkt = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps26_mkt = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
             if '2027' in col and '(E)' in col:
-                op27 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
-                eps27 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+                op27_mkt = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps27_mkt = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
             if '2028' in col and '(E)' in col:
-                op28 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
-                eps28 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+                op28_single = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps28_single = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
     except:
         pass
 
-# 네이버에 없으면 증권사 리포트 평균 사용
-if pd.isnull(op26) and not df_brokers.empty:
-    op26 = df_brokers['op_26'].mean()
-if pd.isnull(op27) and not df_brokers.empty:
-    op27 = df_brokers['op_27'].mean()
+# NTM 계산 (일할 계산)
+ntm_eps, ntm_op = None, None
+if pd.notnull(eps26_mkt) and pd.notnull(eps27_mkt) and pd.notnull(op26_mkt) and pd.notnull(op27_mkt):
+    today = datetime.datetime.now(kst).date()
+    end_of_year = datetime.date(today.year, 12, 31)
+    days_in_year = 365 if today.year % 4 != 0 else 366
+    days_left = (end_of_year - today).days
+    w_cur = days_left / days_in_year
+    w_next = 1.0 - w_cur
+    
+    ntm_eps = (eps26_mkt * w_cur) + (eps27_mkt * w_next)
+    ntm_op = (op26_mkt * w_cur) + (op27_mkt * w_next)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("시가총액", f"{mcap:,.0f} 억" if pd.notnull(mcap) else "N/A")
-col2.metric("26E 영업이익 (시장 컨센서스)", f"{op26:,.0f} 억" if pd.notnull(op26) else "N/A")
-col3.metric("27E 영업이익 (시장 컨센서스)", f"{op27:,.0f} 억" if pd.notnull(op27) else "N/A")
+col2.metric("NTM 영업이익 (시장 컨센서스)", f"{ntm_op:,.0f} 억" if pd.notnull(ntm_op) else "N/A")
+col3.metric("NTM EPS (시장 컨센서스)", f"{ntm_eps:,.0f} 원" if pd.notnull(ntm_eps) else "N/A")
 
-por26 = round(mcap / op26, 2) if pd.notnull(mcap) and pd.notnull(op26) and op26 > 0 else "N/A"
-por27 = round(mcap / op27, 2) if pd.notnull(mcap) and pd.notnull(op27) and op27 > 0 else "N/A"
-col4.metric("26E / 27E POR", f"{por26}배 / {por27}배")
+ntm_per = round(current_price / ntm_eps, 2) if pd.notnull(current_price) and pd.notnull(ntm_eps) and ntm_eps > 0 else "N/A"
+ntm_por = round(mcap / ntm_op, 2) if pd.notnull(mcap) and pd.notnull(ntm_op) and ntm_op > 0 else "N/A"
+col4.metric("NTM PER / POR", f"{ntm_per}배 / {ntm_por}배")
+
+if pd.notnull(op28_single):
+    st.caption("※ 2028E 실적(영업이익 699억)은 오래된 단일 기관 추정치이므로 신뢰도가 낮습니다.")
 
 st.divider()
 
@@ -143,15 +152,15 @@ with col_yoy:
             op_25 = float(op_25_str.replace(',', '')) if op_25_str not in ['NaN', 'nan', '-'] else None
             
             yoy_data = []
-            if pd.notnull(op_25) and pd.notnull(op26) and op_25 > 0:
-                yoy_26 = ((op26 / op_25) - 1) * 100
-                yoy_data.append({"연도": "2026E", "영업이익(억)": round(op26), "YoY (%)": f"+{yoy_26:.1f}%" if yoy_26 > 0 else f"{yoy_26:.1f}%"})
-            if pd.notnull(op26) and pd.notnull(op27) and op26 > 0:
-                yoy_27 = ((op27 / op26) - 1) * 100
-                yoy_data.append({"연도": "2027E", "영업이익(억)": round(op27), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
-            if pd.notnull(op27) and pd.notnull(op28) and op27 > 0:
-                yoy_28 = ((op28 / op27) - 1) * 100
-                yoy_data.append({"연도": "2028E", "영업이익(억)": round(op28), "YoY (%)": f"+{yoy_28:.1f}%" if yoy_28 > 0 else f"{yoy_28:.1f}%"})
+            if pd.notnull(op_25) and pd.notnull(op26_mkt) and op_25 > 0:
+                yoy_26 = ((op26_mkt / op_25) - 1) * 100
+                yoy_data.append({"연도": "2026E", "영업이익(억)": round(op26_mkt), "YoY (%)": f"+{yoy_26:.1f}%" if yoy_26 > 0 else f"{yoy_26:.1f}%"})
+            if pd.notnull(op26_mkt) and pd.notnull(op27_mkt) and op26_mkt > 0:
+                yoy_27 = ((op27_mkt / op26_mkt) - 1) * 100
+                yoy_data.append({"연도": "2027E", "영업이익(억)": round(op27_mkt), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
+            if pd.notnull(op27_mkt) and pd.notnull(op28_single) and op27_mkt > 0:
+                yoy_28 = ((op28_single / op27_mkt) - 1) * 100
+                yoy_data.append({"연도": "2028E", "영업이익(억)": round(op28_single), "YoY (%)": f"+{yoy_28:.1f}%" if yoy_28 > 0 else f"{yoy_28:.1f}%"})
                 
             if yoy_data:
                 st.dataframe(pd.DataFrame(yoy_data), use_container_width=True)
@@ -223,10 +232,13 @@ def get_historical_metrics(df_price, df_fin, forward_12m=True):
         next_eps = year_eps.get(next_y_str)
         next_bps = year_bps.get(next_y_str)
         
-        # 12M FWD 계산 (월별 가중 평균)
+        # NTM (Next Twelve Months) 일할 계산
         if forward_12m:
-            w_cur = (13 - month) / 12.0
-            w_next = (month - 1) / 12.0
+            days_in_year = 365 if date.year % 4 != 0 else 366
+            end_of_year = datetime.date(date.year, 12, 31)
+            days_left = (end_of_year - date.date()).days
+            w_cur = days_left / days_in_year
+            w_next = 1.0 - w_cur
             
             if pd.notnull(cur_eps) and pd.notnull(next_eps):
                 eps_series[date] = (cur_eps * w_cur) + (next_eps * w_next)
@@ -277,8 +289,10 @@ def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
     fig.update_layout(title="Historical PBR Band (12M Fwd BPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
     return fig
 
-# --- 4. Forward EPS 기반 고정 PER별 적정주가 밴드 ---
+# --- 4. Forward EPS 기반 고정 PER/PBR 적정주가 밴드 ---
 st.subheader("📈 Forward EPS 기반 고정 PER/PBR 적정주가 밴드 & Z-Score (12M FWD, 최근 3년)")
+st.warning("⚠️ Valuation confidence: Low to Medium | 사유: 컨센서스 N=2, 선행 Multiple 이력 약 1년")
+
 df_prices = get_daily_prices(ticker, years=3)
 
 if not df_prices.empty and not df_financials.empty:
@@ -291,13 +305,18 @@ if not df_prices.empty and not df_financials.empty:
             if eps_series.mean() > 0:
                 st.plotly_chart(plot_per_band(df_prices, eps_series), use_container_width=True)
                 
-                per_history = df_prices['Close'] / eps_series
-                current_per = per_history.iloc[-1]
-                per_mean = per_history.mean()
-                per_std = per_history.std()
-                if per_std > 0:
-                    per_z = (current_per - per_mean) / per_std
-                    st.info(f"💡 현재 PER: **{current_per:.1f}x** | 3년 평균 PER: **{per_mean:.1f}x** | **표준편차(Z-Score): {per_z:+.2f} 시그마**")
+                per_history = (df_prices['Close'] / eps_series).dropna()
+                if not per_history.empty:
+                    current_per = per_history.iloc[-1]
+                    per_median = per_history.median()
+                    per_mad = (per_history - per_median).abs().median()
+                    
+                    robust_z = (current_per - per_median) / (1.4826 * per_mad) if per_mad > 0 else 0
+                    percentile = (per_history < current_per).mean() * 100
+                    median_premium = (current_per / per_median - 1) * 100
+                    
+                    st.info(f"💡 **NTM PER 지표**: 현재 **{current_per:.1f}x** | 역사적 중앙값 대비 **{median_premium:+.1f}%**\n\n"
+                            f"**Percentile: {percentile:.1f}%** (과거 어느 위치인지) | **Robust Z-Score: {robust_z:+.2f}**")
             else:
                 st.info("EPS 데이터가 부족하여 PER 밴드를 그릴 수 없습니다.")
                 
@@ -305,13 +324,18 @@ if not df_prices.empty and not df_financials.empty:
             if bps_series.mean() > 0:
                 st.plotly_chart(plot_pbr_band(df_prices, bps_series), use_container_width=True)
                 
-                pbr_history = df_prices['Close'] / bps_series
-                current_pbr = pbr_history.iloc[-1]
-                pbr_mean = pbr_history.mean()
-                pbr_std = pbr_history.std()
-                if pbr_std > 0:
-                    pbr_z = (current_pbr - pbr_mean) / pbr_std
-                    st.info(f"💡 현재 PBR: **{current_pbr:.1f}x** | 3년 평균 PBR: **{pbr_mean:.1f}x** | **표준편차(Z-Score): {pbr_z:+.2f} 시그마**")
+                pbr_history = (df_prices['Close'] / bps_series).dropna()
+                if not pbr_history.empty:
+                    current_pbr = pbr_history.iloc[-1]
+                    pbr_median = pbr_history.median()
+                    pbr_mad = (pbr_history - pbr_median).abs().median()
+                    
+                    robust_z_pbr = (current_pbr - pbr_median) / (1.4826 * pbr_mad) if pbr_mad > 0 else 0
+                    percentile_pbr = (pbr_history < current_pbr).mean() * 100
+                    median_premium_pbr = (current_pbr / pbr_median - 1) * 100
+                    
+                    st.info(f"💡 **NTM PBR 지표**: 현재 **{current_pbr:.1f}x** | 역사적 중앙값 대비 **{median_premium_pbr:+.1f}%**\n\n"
+                            f"**Percentile: {percentile_pbr:.1f}%** (과거 어느 위치인지) | **Robust Z-Score: {robust_z_pbr:+.2f}**")
             else:
                 st.info("BPS 데이터가 부족하여 PBR 밴드를 그릴 수 없습니다.")
     except Exception as e:
@@ -407,6 +431,7 @@ if ticker == '425420':
             # 수학적 상관계수 검증 (NaN 제거)
             df_board_corr = df_chart[['기간', 'Board_매입', 'Board_매출_Shifted']].dropna()
             r_board = df_board_corr['Board_매입'].corr(df_board_corr['Board_매출_Shifted']) if not df_board_corr.empty else 0
+            rho_board = df_board_corr['Board_매입'].corr(df_board_corr['Board_매출_Shifted'], method='spearman') if not df_board_corr.empty else 0
             n_board = len(df_board_corr)
             
             df_socket_corr = df_chart[['기간', 'Socket_매입', 'socket_rev']].dropna()
@@ -422,17 +447,17 @@ if ticker == '425420':
                 fig1 = go.Figure()
                 fig1.add_trace(go.Scatter(x=df_board_corr['기간'], y=df_board_corr['Board_매입'], name='Board 매입 (당분기)', line=dict(color='blue', width=3)))
                 fig1.add_trace(go.Scatter(x=df_board_corr['기간'], y=df_board_corr['Board_매출_Shifted'], name='Board 매출 (+1Q 후행)', line=dict(color='red', width=3, dash='dot')))
-                fig1.update_layout(title=f"[+1분기 Lag] Board 매입 vs 다음분기 매출<br><sup>Pearson r = {r_board:.2f} (N={n_board})</sup>", yaxis_title="금액 (백만원)")
+                fig1.update_layout(title=f"[+1분기 Lag] Board 매입 vs 다음분기 매출<br><sup>Pearson r = {r_board:.2f} | Spearman ρ = {rho_board:.2f} (N={n_board})</sup>", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig1, use_container_width=True)
                 
             with col2:
-                # Socket: 0Q Lag (동행)
+                # Socket: 0Q Lag (동분기 동행)
                 fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=df_socket_corr['기간'], y=df_socket_corr['Socket_매입'], name='Socket 매입 (당분기)', line=dict(color='purple', width=3)))
+                fig2.add_trace(go.Scatter(x=df_socket_corr['기간'], y=df_socket_corr['Socket_매입'], name='Socket 매입 (당분기)', line=dict(color='green', width=3)))
                 fig2.add_trace(go.Scatter(x=df_socket_corr['기간'], y=df_socket_corr['socket_rev'], name='Socket 매출 (당분기)', line=dict(color='orange', width=3, dash='dot')))
-                fig2.update_layout(title=f"[0분기 Lag] Socket 매입 vs 당분기 매출<br><sup>Pearson r = {r_socket:.2f} (N={n_socket})</sup>", yaxis_title="금액 (백만원)")
+                fig2.update_layout(title=f"[0분기 Lag] Socket 매입 vs 당분기 매출<br><sup>Pearson r = {r_socket:.2f} (N={n_socket}) | 신뢰도: Low</sup>", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig2, use_container_width=True)
-                st.caption("⚠️ [주의] 2025년 이전 Socket 매출은 별도재무제표 기준, 이후는 연결 기준이 혼합되어 있어 상관관계가 과장될 수 있습니다.")
+                st.caption("⚠️ [Low Confidence 사유] 2025년 이전 Socket 매출은 별도재무제표 기준, 이후는 연결 기준이 혼합되어 있어 우상향 상관관계가 과장됐을 가능성이 큽니다.")
                 
             st.info("💡 위 데이터는 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 AI(Gemini)가 스크래핑하여 단일 분기로 자동 환산합니다.")
     except Exception as e:
