@@ -136,10 +136,11 @@ with col_yoy:
 st.divider()
 
 # --- 3. 증권사별 미래 컨센서스 비교 ---
-st.subheader("🏢 증권사별 2026E / 2027E 컨센서스")
+st.subheader("🏢 증권사별 리포트 컨센서스 (목표주가 및 미래 실적)")
 if not df_brokers.empty:
     avg_row = pd.DataFrame([{
         'broker': '평균 (Average)',
+        'tp': df_brokers['tp'].mean(),
         'op_26': df_brokers['op_26'].mean(),
         'np_26': df_brokers['np_26'].mean(),
         'op_27': df_brokers['op_27'].mean(),
@@ -147,9 +148,9 @@ if not df_brokers.empty:
         'date': '-'
     }])
     df_disp = pd.concat([df_brokers, avg_row], ignore_index=True)
-    df_disp.columns = ['증권사', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익', '업데이트 일자']
+    df_disp.columns = ['증권사', '목표주가(원)', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익', '업데이트 일자']
     
-    for col in ['26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익']:
+    for col in ['목표주가(원)', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익']:
         df_disp[col] = df_disp[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "N/A")
         
     st.dataframe(df_disp, use_container_width=True)
@@ -158,53 +159,99 @@ else:
 
 st.divider()
 
+def get_historical_metrics(df_price, df_fin):
+    eps_series = pd.Series(index=df_price.index, dtype=float)
+    bps_series = pd.Series(index=df_price.index, dtype=float)
+    
+    year_eps = {}
+    year_bps = {}
+    for col in df_fin.columns:
+        if '20' in col:
+            year_str = col[:4]
+            try:
+                e_val = str(df_fin.loc['EPS(원)', col]).replace(',', '')
+                b_val = str(df_fin.loc['BPS(원)', col]).replace(',', '')
+                year_eps[year_str] = float(e_val) if e_val not in ['NaN', 'nan', '-', ''] else None
+                year_bps[year_str] = float(b_val) if b_val not in ['NaN', 'nan', '-', ''] else None
+            except:
+                pass
+                
+    for date in df_price.index:
+        y_str = str(date.year)
+        if y_str in year_eps and pd.notnull(year_eps[y_str]):
+            eps_series[date] = year_eps[y_str]
+        else:
+            prev_y = str(date.year - 1)
+            if prev_y in year_eps and pd.notnull(year_eps[prev_y]):
+                eps_series[date] = year_eps[prev_y]
+                
+        if y_str in year_bps and pd.notnull(year_bps[y_str]):
+            bps_series[date] = year_bps[y_str]
+        else:
+            prev_y = str(date.year - 1)
+            if prev_y in year_bps and pd.notnull(year_bps[prev_y]):
+                bps_series[date] = year_bps[prev_y]
+                
+    eps_series.ffill(inplace=True)
+    bps_series.ffill(inplace=True)
+    eps_series.bfill(inplace=True)
+    bps_series.bfill(inplace=True)
+    
+    return eps_series, bps_series
+
+def plot_per_band(df, eps_series, per_multiples=[10, 15, 20, 25, 30]):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='주가', line=dict(color='black', width=2)))
+    colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
+    for per, color in zip(per_multiples, colors):
+        fig.add_trace(go.Scatter(x=df.index, y=eps_series * per, name=f'{per}x', line=dict(color=color, dash='dash')))
+    fig.update_layout(title="Historical PER Band (Trailing EPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
+    return fig
+
+def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='주가', line=dict(color='black', width=2)))
+    colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
+    for pbr, color in zip(pbr_multiples, colors):
+        fig.add_trace(go.Scatter(x=df.index, y=bps_series * pbr, name=f'{pbr}x', line=dict(color=color, dash='dash')))
+    fig.update_layout(title="Historical PBR Band (Trailing BPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
+    return fig
+
 # --- 4. Historical PER / PBR / POR Band Charts ---
-st.subheader("📈 Historical Valuation 밴드 차트 (3년)")
+st.subheader("📈 Historical Valuation 밴드 차트 & Z-Score (3년)")
 df_prices = get_daily_prices(ticker, years=3)
 
 if not df_prices.empty and not df_financials.empty:
     try:
-        # 가치 평가 밴드의 기준은 2025E(미래 예상치)를 최우선으로, 없으면 2024년 사용
-        eps_str_25 = str(df_financials.loc['EPS(원)'].iloc[2])
-        bps_str_25 = str(df_financials.loc['BPS(원)'].iloc[2])
-        
-        eps_str = eps_str_25 if eps_str_25 not in ['NaN', 'nan', '-'] else str(df_financials.loc['EPS(원)'].iloc[1])
-        bps_str = bps_str_25 if bps_str_25 not in ['NaN', 'nan', '-'] else str(df_financials.loc['BPS(원)'].iloc[1])
-        
-        eps = float(eps_str.replace(',', '')) if eps_str not in ['NaN', 'nan', '-'] else 0
-        bps = float(bps_str.replace(',', '')) if bps_str not in ['NaN', 'nan', '-'] else 0
+        eps_series, bps_series = get_historical_metrics(df_prices, df_financials)
         
         tab1, tab2 = st.tabs(["PER 밴드", "PBR 밴드"])
         
         with tab1:
-            if eps > 0:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_prices.index, y=df_prices['Close'], mode='lines', name='주가', line=dict(color='black', width=2)))
+            if eps_series.mean() > 0:
+                st.plotly_chart(plot_per_band(df_prices, eps_series), use_container_width=True)
                 
-                multiples = [10, 15, 20, 25, 30]
-                colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
-                
-                for mult, color in zip(multiples, colors):
-                    fig.add_trace(go.Scatter(x=df_prices.index, y=[eps * mult] * len(df_prices), mode='lines', name=f'{mult}x', line=dict(color=color, dash='dash')))
-                
-                fig.update_layout(title="Historical PER Band (Trailing EPS 기준)", yaxis_title="주가 (원)", height=500)
-                st.plotly_chart(fig, use_container_width=True)
+                per_history = df_prices['Close'] / eps_series
+                current_per = per_history.iloc[-1]
+                per_mean = per_history.mean()
+                per_std = per_history.std()
+                if per_std > 0:
+                    per_z = (current_per - per_mean) / per_std
+                    st.info(f"💡 현재 PER: **{current_per:.1f}x** | 3년 평균 PER: **{per_mean:.1f}x** | **표준편차(Z-Score): {per_z:+.2f} 시그마**")
             else:
                 st.info("EPS 데이터가 부족하여 PER 밴드를 그릴 수 없습니다.")
                 
         with tab2:
-            if bps > 0:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_prices.index, y=df_prices['Close'], mode='lines', name='주가', line=dict(color='black', width=2)))
+            if bps_series.mean() > 0:
+                st.plotly_chart(plot_pbr_band(df_prices, bps_series), use_container_width=True)
                 
-                multiples = [1.0, 2.0, 3.0, 4.0, 5.0]
-                colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
-                
-                for mult, color in zip(multiples, colors):
-                    fig.add_trace(go.Scatter(x=df_prices.index, y=[bps * mult] * len(df_prices), mode='lines', name=f'{mult}x', line=dict(color=color, dash='dash')))
-                
-                fig.update_layout(title="Historical PBR Band (Trailing BPS 기준)", yaxis_title="주가 (원)", height=500)
-                st.plotly_chart(fig, use_container_width=True)
+                pbr_history = df_prices['Close'] / bps_series
+                current_pbr = pbr_history.iloc[-1]
+                pbr_mean = pbr_history.mean()
+                pbr_std = pbr_history.std()
+                if pbr_std > 0:
+                    pbr_z = (current_pbr - pbr_mean) / pbr_std
+                    st.info(f"💡 현재 PBR: **{current_pbr:.1f}x** | 3년 평균 PBR: **{pbr_mean:.1f}x** | **표준편차(Z-Score): {pbr_z:+.2f} 시그마**")
             else:
                 st.info("BPS 데이터가 부족하여 PBR 밴드를 그릴 수 없습니다.")
     except Exception as e:
@@ -238,7 +285,7 @@ if ticker == '425420':
     try:
         import sqlite3
         conn = sqlite3.connect('tracking.db')
-        df_dart_raw = pd.read_sql_query("SELECT rcept_no, report_nm, board_parts_krw, pcb_krw, socket_krw, samsung_rev, other_rev FROM tfe_dart", conn)
+        df_dart_raw = pd.read_sql_query("SELECT rcept_no, report_nm, board_parts_krw, pcb_krw, raw_socket_krw, prod_socket_krw, cok_rev, board_rev, socket_rev FROM tfe_dart_v2", conn)
         conn.close()
         
         if not df_dart_raw.empty:
@@ -246,7 +293,7 @@ if ticker == '425420':
             df_dart_raw['month'] = df_dart_raw['report_nm'].str.extract(r'\.(\d{2})\)').astype(int)
             df_dart_raw.sort_values(['year', 'month'], inplace=True)
             
-            metric_cols = ['board_parts_krw', 'pcb_krw', 'socket_krw', 'samsung_rev', 'other_rev']
+            metric_cols = ['board_parts_krw', 'pcb_krw', 'raw_socket_krw', 'prod_socket_krw', 'cok_rev', 'board_rev', 'socket_rev']
             standalone_records = []
             
             for year, group in df_dart_raw.groupby('year'):
@@ -278,37 +325,45 @@ if ticker == '425420':
                     standalone_records.append(rec)
                     
             df_standalone = pd.DataFrame(standalone_records)
+            df_standalone['Board_매입'] = df_standalone['board_parts_krw'] + df_standalone['pcb_krw']
+            df_standalone['Socket_매입'] = df_standalone['raw_socket_krw'] + df_standalone['prod_socket_krw']
             
-            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹 (단일 분기 환산)")
+            st.markdown("#### 📊 [자동 업데이트] 전자공시 제품별 원재료 매입 및 매출 트래킹 (단일 분기 환산)")
             
-            df_table = df_standalone.copy()
-            df_table.columns = ['기간', 'Board Parts 매입(백만)', 'PCB 매입(백만)', 'Socket 매입(백만)', '삼성전자 매출(백만)', '기타 매출(백만)']
+            df_table = df_standalone[['기간', 'Board_매입', 'Socket_매입', 'cok_rev', 'board_rev', 'socket_rev']].copy()
+            df_table.columns = ['기간', 'Board 매입(백만)', 'Socket 매입(백만)', 'COK 매출(백만)', 'Board 매출(백만)', 'Socket 매출(백만)']
             
             for col in df_table.columns[1:]:
                 df_table[col] = df_table[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
                 
             st.dataframe(df_table, use_container_width=True)
             
-            # 차트 그릴 때는 왜곡을 막기 위해 순수 분기(1Q, 2Q, 3Q, 4Q) 데이터만 필터링
-            df_chart = df_standalone[df_standalone['기간'].str.contains('Q$')].copy()
+            # 순수 분기 데이터만 차트용으로 필터링
+            df_chart = df_standalone[df_standalone['기간'].str.contains('Q$')].copy().reset_index(drop=True)
+            
+            # Lag 반영 로직
+            df_chart['Board_매출_Shifted'] = df_chart['board_rev'].shift(-1)
+            
+            st.markdown("#### 🎯 제품별 매입-매출 선행지표 상관관계 분석")
             
             col1, col2 = st.columns(2)
             
             with col1:
+                # Board: +1Q Lag (매입이 1분기 선행)
                 fig1 = go.Figure()
-                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['board_parts_krw'], name='Board Parts'))
-                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['pcb_krw'], name='PCB'))
-                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['socket_krw'], name='Socket'))
-                fig1.update_layout(title="원재료 분기별 매입액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                fig1.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Board_매입'], name='Board 매입 (당분기)', line=dict(color='blue', width=3)))
+                fig1.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Board_매출_Shifted'], name='Board 매출 (+1Q 후행)', line=dict(color='red', width=3, dash='dot')))
+                fig1.update_layout(title="[+1분기 Lag] Board 매입 vs 다음분기 매출 상관관계", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig1, use_container_width=True)
                 
             with col2:
+                # Socket: 0Q Lag (동행)
                 fig2 = go.Figure()
-                fig2.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['samsung_rev'], name='삼성전자'))
-                fig2.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['other_rev'], name='기타 고객사'))
-                fig2.update_layout(title="고객사 분기별 매출액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                fig2.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Socket_매입'], name='Socket 매입 (당분기)', line=dict(color='purple', width=3)))
+                fig2.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['socket_rev'], name='Socket 매출 (당분기)', line=dict(color='orange', width=3, dash='dot')))
+                fig2.update_layout(title="[0분기 Lag] Socket 매입 vs 당분기 매출 상관관계", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig2, use_container_width=True)
                 
-            st.info("💡 위 데이터는 DART API와 AI(Gemini)를 통해 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 스크래핑하여 단일 분기로 환산됩니다.")
+            st.info("💡 위 데이터는 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 AI(Gemini)가 스크래핑하여 단일 분기로 자동 환산합니다.")
     except Exception as e:
         st.error(f"DART 표 렌더링 중 에러: {e}")

@@ -58,7 +58,7 @@ def get_estimates_by_broker(ticker):
     conn = sqlite3.connect(DB_NAME)
     # Get the latest estimate from each broker
     query = '''
-        SELECT broker, op_26, np_26, op_27, np_27, date
+        SELECT broker, tp, op_26, np_26, op_27, np_27, date
         FROM estimates
         WHERE ticker = ?
         ORDER BY date DESC
