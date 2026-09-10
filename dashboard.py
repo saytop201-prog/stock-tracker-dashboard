@@ -20,27 +20,7 @@ TARGET_STOCKS = {
 
 st.set_page_config(page_title="소부장 트래킹 대시보드", layout="wide")
 
-def check_password():
-    def password_entered():
-        if st.session_state.get("password", "") == "0000": 
-            st.session_state["password_correct"] = True
-            if "password" in st.session_state:
-                del st.session_state["password"] 
-        else:
-            st.session_state["password_correct"] = False
 
-    if "password_correct" not in st.session_state:
-        st.text_input("🔒 비밀번호를 입력하세요:", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("🔒 비밀번호를 입력하세요:", type="password", on_change=password_entered, key="password")
-        st.error("비밀번호가 틀렸습니다.")
-        return False
-    else:
-        return True
-
-if not check_password():
-    st.stop()
 
 @st.cache_data(ttl=3600)
 def get_historical_financials(ticker):
