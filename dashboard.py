@@ -72,8 +72,16 @@ def get_current_market_data(ticker):
         url = f"https://finance.naver.com/item/main.naver?code={ticker}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
-        mcap_str = soup.select_one('#_market_sum').text.replace('\t', '').replace('\n', '').replace(',', '')
-        mcap = int(mcap_str) if mcap_str.isdigit() else None
+        mcap_str = soup.select_one('#_market_sum').text.strip().replace('\t', '').replace('\n', '').replace(',', '')
+        
+        mcap = 0
+        if '조' in mcap_str:
+            parts = mcap_str.split('조')
+            mcap += int(parts[0].strip()) * 10000
+            if len(parts) > 1 and parts[1].strip():
+                mcap += int(parts[1].strip())
+        else:
+            mcap = int(mcap_str.strip()) if mcap_str.strip().isdigit() else None
         
         # 주가
         price_str = soup.select_one('.no_today .blind').text.replace(',', '')
@@ -81,6 +89,72 @@ def get_current_market_data(ticker):
         return mcap, price
     except:
         return None, None
+
+import os
+import re
+try:
+    import PyPDF2
+except ImportError:
+    pass
+
+@st.cache_data(ttl=5)
+def parse_telegram_pdfs(company_name):
+    folder = os.path.join('telegram_reports', company_name)
+    if not os.path.exists(folder):
+        return pd.DataFrame()
+        
+    records = []
+    try:
+        for filename in os.listdir(folder):
+            if not filename.endswith('.pdf'):
+                continue
+                
+            date_match = re.search(r'(20\d{6})', filename)
+            date_str = date_match.group(1) if date_match else 'N/A'
+            if date_str != 'N/A':
+                date_str = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}'
+                
+            tp = None
+            path = os.path.join(folder, filename)
+            try:
+                reader = PyPDF2.PdfReader(path)
+                lines = []
+                for i in range(min(2, len(reader.pages))):
+                    page_text = reader.pages[i].extract_text()
+                    if page_text:
+                        lines.extend(page_text.split('\n'))
+                
+                for i, line in enumerate(lines):
+                    clean_line = line.replace(' ', '')
+                    if '목표주가' in clean_line:
+                        match = re.search(r'([\d,]+)\s*원', line)
+                        if match:
+                            tp = int(match.group(1).replace(',', ''))
+                        else:
+                            for j in range(1, 4):
+                                if i+j < len(lines):
+                                    match = re.search(r'([\d,]+)', lines[i+j].replace(',', ''))
+                                    if match and int(match.group(1)) > 1000:
+                                        tp = int(match.group(1))
+                                        break
+                        if tp:
+                            break
+            except:
+                pass
+                
+            if tp:  # 목표주가가 있는 리포트만 수집
+                records.append({
+                    '파일명': filename,
+                    '발간일': date_str,
+                    '목표주가': tp
+                })
+    except:
+        pass
+        
+    df = pd.DataFrame(records)
+    if not df.empty:
+        df = df.sort_values('발간일')
+    return df
 
 st.title("📈 반도체 소부장 트래킹 대시보드")
 st.sidebar.header("종목 선택")
@@ -212,6 +286,23 @@ else:
     st.subheader("🏢 증권사별 리포트 컨센서스")
     st.info("수집된 증권사 리포트가 없습니다.")
 
+# --- 3-1. 텔레그램 리포트 마이닝 (목표주가 트렌드) ---
+df_tele = parse_telegram_pdfs(selected_company)
+if not df_tele.empty:
+    st.subheader(f"📂 텔레그램 리포트 마이닝: 목표주가(TP) 트렌드 ({selected_company})")
+    
+    # 목표주가 선차트
+    import plotly.express as px
+    fig_tp = px.line(df_tele, x='발간일', y='목표주가', markers=True, text='목표주가', title=f"{selected_company} 증권사 목표주가 시계열 추적 (PDF 마이닝)")
+    fig_tp.update_traces(textposition="top center", line=dict(width=3, color='royalblue'), marker=dict(size=10, color='red'))
+    fig_tp.update_layout(yaxis_title="목표주가(원)", xaxis_title="발간일")
+    st.plotly_chart(fig_tp, use_container_width=True)
+    
+    # 상세 데이터 테이블
+    st.markdown("**🔍 파싱된 리포트 원문 목록**")
+    st.dataframe(df_tele, use_container_width=True)
+    st.caption("💡 `telegram_reports/종목명/` 폴더에 새 PDF를 넣으시면 위 차트와 표에 실시간(자동)으로 업데이트됩니다!")
+    
 st.divider()
 
 def get_historical_metrics(df_price, df_fin, forward_12m=True):
