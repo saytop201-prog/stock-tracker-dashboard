@@ -39,6 +39,14 @@ def get_historical_financials(ticker):
                         '부채비율', '당좌비율', '유보율', 'EPS(원)', 'PER(배)', 'BPS(원)', 'PBR(배)', 
                         '주당배당금', '시가배당률', '배당성향']
         df_annual.index = metric_names[:len(df_annual)]
+        
+        # TFE(425420) 하드코딩 2027/2028 FnGuide 실적 연동
+        if ticker == '425420':
+            col_27 = [2085, 510, 467, 24.48, 22.40, 23.15, 24.07, None, None, 3713, 14.38, 18018, 2.96, None, None, None]
+            col_28 = [2704, 699, 591, 25.85, 21.86, 23.55, 21.24, None, None, 4787, 11.16, 22836, 2.34, None, None, None]
+            df_annual['2027.12(E)'] = col_27[:len(df_annual)]
+            df_annual['2028.12(E)'] = col_28[:len(df_annual)]
+            
         return df_annual
     except Exception as e:
         return pd.DataFrame()
@@ -82,12 +90,12 @@ mcap, current_price = get_current_market_data(ticker)
 
 # --- 1. Top Summary Cards ---
 # 네이버 금융(df_financials) 컨센서스 기준 최우선 사용
-op26, op27 = None, None
-eps26, eps27 = None, None
+op26, op27, op28 = None, None, None
+eps26, eps27, eps28 = None, None, None
 
 if not df_financials.empty:
     try:
-        # 네이버 금융의 26E, 27E 파싱 (보통 2026.12(E) 같은 컬럼)
+        # 네이버 금융의 26E, 27E, 28E 파싱
         for col in df_financials.columns:
             if '2026' in col and '(E)' in col:
                 op26 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
@@ -95,6 +103,9 @@ if not df_financials.empty:
             if '2027' in col and '(E)' in col:
                 op27 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
                 eps27 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+            if '2028' in col and '(E)' in col:
+                op28 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps28 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
     except:
         pass
 
@@ -138,6 +149,9 @@ with col_yoy:
             if pd.notnull(op26) and pd.notnull(op27) and op26 > 0:
                 yoy_27 = ((op27 / op26) - 1) * 100
                 yoy_data.append({"연도": "2027E", "영업이익(억)": round(op27), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
+            if pd.notnull(op27) and pd.notnull(op28) and op27 > 0:
+                yoy_28 = ((op28 / op27) - 1) * 100
+                yoy_data.append({"연도": "2028E", "영업이익(억)": round(op28), "YoY (%)": f"+{yoy_28:.1f}%" if yoy_28 > 0 else f"{yoy_28:.1f}%"})
                 
             if yoy_data:
                 st.dataframe(pd.DataFrame(yoy_data), use_container_width=True)
