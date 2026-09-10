@@ -13,9 +13,12 @@ def init_db():
             broker TEXT,
             company TEXT,
             ticker TEXT,
+            tp REAL,
             market_cap INTEGER,
+            rev_26 REAL,
             op_26 REAL,
             np_26 REAL,
+            rev_27 REAL,
             op_27 REAL,
             np_27 REAL,
             PRIMARY KEY (date, ticker, broker)
