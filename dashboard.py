@@ -110,27 +110,26 @@ with col_yoy:
     st.subheader("🚀 영업이익 YoY(%) 상승률")
     if not df_financials.empty and not df_brokers.empty:
         try:
-            # 2025E 영업이익 (네이버 금융 테이블의 3번째 컬럼이 2025.12 예상치)
             op_25_str = str(df_financials.loc['영업이익'].iloc[2])
-            op_25 = float(op_25_str.replace(',', '')) if op_25_str != 'NaN' and op_25_str != 'nan' else None
+            op_25 = float(op_25_str.replace(',', '')) if op_25_str not in ['NaN', 'nan', '-'] else None
             
             avg_op26 = df_brokers['op_26'].mean()
             avg_op27 = df_brokers['op_27'].mean()
             
             yoy_data = []
-            if op_25 and avg_op26:
+            if pd.notnull(op_25) and pd.notnull(avg_op26) and op_25 > 0:
                 yoy_26 = ((avg_op26 / op_25) - 1) * 100
                 yoy_data.append({"연도": "2026E", "영업이익(억)": round(avg_op26), "YoY (%)": f"+{yoy_26:.1f}%" if yoy_26 > 0 else f"{yoy_26:.1f}%"})
-            if avg_op26 and avg_op27:
+            if pd.notnull(avg_op26) and pd.notnull(avg_op27) and avg_op26 > 0:
                 yoy_27 = ((avg_op27 / avg_op26) - 1) * 100
                 yoy_data.append({"연도": "2027E", "영업이익(억)": round(avg_op27), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
                 
             if yoy_data:
                 st.dataframe(pd.DataFrame(yoy_data), use_container_width=True)
             else:
-                st.info("비교할 2025년 영업이익 데이터가 부족합니다.")
+                st.info("비교할 2025년 영업이익 데이터가 부족하거나 적자입니다.")
         except Exception as e:
-            st.error("YoY 계산 중 에러 발생")
+            st.error(f"YoY 계산 중 에러 발생: {e}")
     else:
         st.info("추정치 데이터가 없습니다.")
 
@@ -139,7 +138,6 @@ st.divider()
 # --- 3. 증권사별 미래 컨센서스 비교 ---
 st.subheader("🏢 증권사별 2026E / 2027E 컨센서스")
 if not df_brokers.empty:
-    # Add Average Row
     avg_row = pd.DataFrame([{
         'broker': '평균 (Average)',
         'op_26': df_brokers['op_26'].mean(),
@@ -151,7 +149,6 @@ if not df_brokers.empty:
     df_disp = pd.concat([df_brokers, avg_row], ignore_index=True)
     df_disp.columns = ['증권사', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익', '업데이트 일자']
     
-    # Format
     for col in ['26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익']:
         df_disp[col] = df_disp[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "N/A")
         
@@ -167,12 +164,15 @@ df_prices = get_daily_prices(ticker, years=3)
 
 if not df_prices.empty and not df_financials.empty:
     try:
-        # 최근 12개월(TTM) EPS, BPS 추정 (가장 최근 연도 데이터 사용)
-        eps_str = str(df_financials.loc['EPS(원)'].iloc[1]) # 2024년 기준
-        bps_str = str(df_financials.loc['BPS(원)'].iloc[1])
+        # 가치 평가 밴드의 기준은 2025E(미래 예상치)를 최우선으로, 없으면 2024년 사용
+        eps_str_25 = str(df_financials.loc['EPS(원)'].iloc[2])
+        bps_str_25 = str(df_financials.loc['BPS(원)'].iloc[2])
         
-        eps = float(eps_str.replace(',', '')) if eps_str != 'NaN' else 0
-        bps = float(bps_str.replace(',', '')) if bps_str != 'NaN' else 0
+        eps_str = eps_str_25 if eps_str_25 not in ['NaN', 'nan', '-'] else str(df_financials.loc['EPS(원)'].iloc[1])
+        bps_str = bps_str_25 if bps_str_25 not in ['NaN', 'nan', '-'] else str(df_financials.loc['BPS(원)'].iloc[1])
+        
+        eps = float(eps_str.replace(',', '')) if eps_str not in ['NaN', 'nan', '-'] else 0
+        bps = float(bps_str.replace(',', '')) if bps_str not in ['NaN', 'nan', '-'] else 0
         
         tab1, tab2 = st.tabs(["PER 밴드", "PBR 밴드"])
         
