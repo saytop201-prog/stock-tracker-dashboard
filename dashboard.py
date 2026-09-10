@@ -238,22 +238,50 @@ if ticker == '425420':
     try:
         import sqlite3
         conn = sqlite3.connect('tracking.db')
-        df_dart_raw = pd.read_sql_query("SELECT rcept_no, report_nm, board_parts_krw, pcb_krw, socket_krw, samsung_rev, other_rev FROM tfe_dart ORDER BY rcept_no ASC", conn)
+        df_dart_raw = pd.read_sql_query("SELECT rcept_no, report_nm, board_parts_krw, pcb_krw, socket_krw, samsung_rev, other_rev FROM tfe_dart", conn)
         conn.close()
         
         if not df_dart_raw.empty:
-            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹 (누적 기준)")
+            df_dart_raw['year'] = df_dart_raw['report_nm'].str.extract(r'(\d{4})').astype(int)
+            df_dart_raw['month'] = df_dart_raw['report_nm'].str.extract(r'\.(\d{2})\)').astype(int)
+            df_dart_raw.sort_values(['year', 'month'], inplace=True)
             
-            def get_period_label(name):
-                if '03)' in name: return name[-8:-3] + ' 1Q'
-                if '06)' in name: return name[-8:-3] + ' 1H'
-                if '09)' in name: return name[-8:-3] + ' 3Q누적'
-                if '12)' in name: return name[-8:-3] + ' 연간'
-                return name
+            metric_cols = ['board_parts_krw', 'pcb_krw', 'socket_krw', 'samsung_rev', 'other_rev']
+            standalone_records = []
             
-            df_dart_raw['기간'] = df_dart_raw['report_nm'].apply(get_period_label)
+            for year, group in df_dart_raw.groupby('year'):
+                cums = {m: group[group['month'] == m].iloc[0] for m in group['month']}
+                
+                if 3 in cums:
+                    rec = {'기간': f'{year} 1Q'}
+                    for c in metric_cols: rec[c] = cums[3][c]
+                    standalone_records.append(rec)
+                if 6 in cums and 3 in cums:
+                    rec = {'기간': f'{year} 2Q'}
+                    for c in metric_cols: rec[c] = cums[6][c] - cums[3][c]
+                    standalone_records.append(rec)
+                if 9 in cums and 6 in cums:
+                    rec = {'기간': f'{year} 3Q'}
+                    for c in metric_cols: rec[c] = cums[9][c] - cums[6][c]
+                    standalone_records.append(rec)
+                if 12 in cums and 9 in cums:
+                    rec = {'기간': f'{year} 4Q'}
+                    for c in metric_cols: rec[c] = cums[12][c] - cums[9][c]
+                    standalone_records.append(rec)
+                if 12 in cums and 9 not in cums and 6 in cums:
+                    rec = {'기간': f'{year} 2H(3Q+4Q)'}
+                    for c in metric_cols: rec[c] = cums[12][c] - cums[6][c]
+                    standalone_records.append(rec)
+                if 12 in cums and 9 not in cums and 6 not in cums and 3 in cums:
+                    rec = {'기간': f'{year} 2Q~4Q'}
+                    for c in metric_cols: rec[c] = cums[12][c] - cums[3][c]
+                    standalone_records.append(rec)
+                    
+            df_standalone = pd.DataFrame(standalone_records)
             
-            df_table = df_dart_raw[['기간', 'board_parts_krw', 'pcb_krw', 'socket_krw', 'samsung_rev', 'other_rev']].copy()
+            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹 (단일 분기 환산)")
+            
+            df_table = df_standalone.copy()
             df_table.columns = ['기간', 'Board Parts 매입(백만)', 'PCB 매입(백만)', 'Socket 매입(백만)', '삼성전자 매출(백만)', '기타 매출(백만)']
             
             for col in df_table.columns[1:]:
@@ -261,23 +289,26 @@ if ticker == '425420':
                 
             st.dataframe(df_table, use_container_width=True)
             
+            # 차트 그릴 때는 왜곡을 막기 위해 순수 분기(1Q, 2Q, 3Q, 4Q) 데이터만 필터링
+            df_chart = df_standalone[df_standalone['기간'].str.contains('Q$')].copy()
+            
             col1, col2 = st.columns(2)
             
             with col1:
                 fig1 = go.Figure()
-                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['board_parts_krw'], name='Board Parts'))
-                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['pcb_krw'], name='PCB'))
-                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['socket_krw'], name='Socket'))
-                fig1.update_layout(title="원재료 누적 매입액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['board_parts_krw'], name='Board Parts'))
+                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['pcb_krw'], name='PCB'))
+                fig1.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['socket_krw'], name='Socket'))
+                fig1.update_layout(title="원재료 분기별 매입액 추이", barmode='group', yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig1, use_container_width=True)
                 
             with col2:
                 fig2 = go.Figure()
-                fig2.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['samsung_rev'], name='삼성전자'))
-                fig2.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['other_rev'], name='기타 고객사'))
-                fig2.update_layout(title="고객사별 누적 매출액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                fig2.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['samsung_rev'], name='삼성전자'))
+                fig2.add_trace(go.Bar(x=df_chart['기간'], y=df_chart['other_rev'], name='기타 고객사'))
+                fig2.update_layout(title="고객사 분기별 매출액 추이", barmode='group', yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig2, use_container_width=True)
                 
-            st.info("💡 위 데이터는 DART API와 AI(Gemini)를 통해 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 스크래핑하여 자동으로 누적됩니다.")
+            st.info("💡 위 데이터는 DART API와 AI(Gemini)를 통해 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 스크래핑하여 단일 분기로 환산됩니다.")
     except Exception as e:
         st.error(f"DART 표 렌더링 중 에러: {e}")
