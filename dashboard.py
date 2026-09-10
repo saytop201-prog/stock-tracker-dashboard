@@ -69,39 +69,76 @@ def get_daily_prices(ticker, years=3):
     df = fdr.DataReader(ticker, start_date)
     return df
 
+@st.cache_data(ttl=3600)
+def get_current_market_data(ticker):
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={ticker}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        soup = BeautifulSoup(res.text, 'html.parser')
+        mcap_str = soup.select_one('#_market_sum').text.replace('\t', '').replace('\n', '').replace(',', '')
+        mcap = int(mcap_str) if mcap_str.isdigit() else None
+        
+        # 주가
+        price_str = soup.select_one('.no_today .blind').text.replace(',', '')
+        price = int(price_str) if price_str.isdigit() else None
+        return mcap, price
+    except:
+        return None, None
+
 st.title("📈 반도체 소부장 트래킹 대시보드")
 st.sidebar.header("종목 선택")
 selected_company = st.sidebar.selectbox("종목을 선택하세요", list(TARGET_STOCKS.keys()))
 ticker = TARGET_STOCKS[selected_company]
 
 st.header(f"[{ticker}] {selected_company}")
+now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+st.markdown(f"**🕒 Market data as of: {now_str} KST**")
 
 df_estimates = db_manager.get_historical_estimates(ticker)
 df_brokers = db_manager.get_estimates_by_broker(ticker)
 df_financials = get_historical_financials(ticker)
 
+mcap, current_price = get_current_market_data(ticker)
+
 # --- 1. Top Summary Cards ---
-if not df_estimates.empty:
-    latest = df_estimates.iloc[-1]
-    mcap = latest['market_cap']
-    op26 = latest['op_26']
-    op27 = latest['op_27']
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("시가총액", f"{mcap:,.0f} 억" if pd.notnull(mcap) else "N/A")
-    col2.metric("26E 평균 영업이익", f"{op26:,.0f} 억" if pd.notnull(op26) else "N/A")
-    col3.metric("27E 평균 영업이익", f"{op27:,.0f} 억" if pd.notnull(op27) else "N/A")
-    
-    por26 = round(mcap / op26, 2) if pd.notnull(mcap) and pd.notnull(op26) and op26 > 0 else "N/A"
-    por27 = round(mcap / op27, 2) if pd.notnull(mcap) and pd.notnull(op27) and op27 > 0 else "N/A"
-    col4.metric("26E / 27E POR", f"{por26}배 / {por27}배")
+# 네이버 금융(df_financials) 컨센서스 기준 최우선 사용
+op26, op27 = None, None
+eps26, eps27 = None, None
+
+if not df_financials.empty:
+    try:
+        # 네이버 금융의 26E, 27E 파싱 (보통 2026.12(E) 같은 컬럼)
+        for col in df_financials.columns:
+            if '2026' in col and '(E)' in col:
+                op26 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps26 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+            if '2027' in col and '(E)' in col:
+                op27 = float(str(df_financials.loc['영업이익', col]).replace(',', ''))
+                eps27 = float(str(df_financials.loc['EPS(원)', col]).replace(',', ''))
+    except:
+        pass
+
+# 네이버에 없으면 증권사 리포트 평균 사용
+if pd.isnull(op26) and not df_brokers.empty:
+    op26 = df_brokers['op_26'].mean()
+if pd.isnull(op27) and not df_brokers.empty:
+    op27 = df_brokers['op_27'].mean()
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("시가총액", f"{mcap:,.0f} 억" if pd.notnull(mcap) else "N/A")
+col2.metric("26E 영업이익 (시장 컨센서스)", f"{op26:,.0f} 억" if pd.notnull(op26) else "N/A")
+col3.metric("27E 영업이익 (시장 컨센서스)", f"{op27:,.0f} 억" if pd.notnull(op27) else "N/A")
+
+por26 = round(mcap / op26, 2) if pd.notnull(mcap) and pd.notnull(op26) and op26 > 0 else "N/A"
+por27 = round(mcap / op27, 2) if pd.notnull(mcap) and pd.notnull(op27) and op27 > 0 else "N/A"
+col4.metric("26E / 27E POR", f"{por26}배 / {por27}배")
 
 st.divider()
 
 # --- 2. Historical Key Financials & YoY Growth ---
 col_fin, col_yoy = st.columns([2, 1])
 with col_fin:
-    st.subheader("📊 Historical Key Financials (최근 연간 실적)")
+    st.subheader("📊 Historical & Forecast Financials")
     if not df_financials.empty:
         st.dataframe(df_financials, use_container_width=True)
     else:
@@ -109,21 +146,18 @@ with col_fin:
 
 with col_yoy:
     st.subheader("🚀 영업이익 YoY(%) 상승률")
-    if not df_financials.empty and not df_brokers.empty:
+    if not df_financials.empty:
         try:
             op_25_str = str(df_financials.loc['영업이익'].iloc[2])
             op_25 = float(op_25_str.replace(',', '')) if op_25_str not in ['NaN', 'nan', '-'] else None
             
-            avg_op26 = df_brokers['op_26'].mean()
-            avg_op27 = df_brokers['op_27'].mean()
-            
             yoy_data = []
-            if pd.notnull(op_25) and pd.notnull(avg_op26) and op_25 > 0:
-                yoy_26 = ((avg_op26 / op_25) - 1) * 100
-                yoy_data.append({"연도": "2026E", "영업이익(억)": round(avg_op26), "YoY (%)": f"+{yoy_26:.1f}%" if yoy_26 > 0 else f"{yoy_26:.1f}%"})
-            if pd.notnull(avg_op26) and pd.notnull(avg_op27) and avg_op26 > 0:
-                yoy_27 = ((avg_op27 / avg_op26) - 1) * 100
-                yoy_data.append({"연도": "2027E", "영업이익(억)": round(avg_op27), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
+            if pd.notnull(op_25) and pd.notnull(op26) and op_25 > 0:
+                yoy_26 = ((op26 / op_25) - 1) * 100
+                yoy_data.append({"연도": "2026E", "영업이익(억)": round(op26), "YoY (%)": f"+{yoy_26:.1f}%" if yoy_26 > 0 else f"{yoy_26:.1f}%"})
+            if pd.notnull(op26) and pd.notnull(op27) and op26 > 0:
+                yoy_27 = ((op27 / op26) - 1) * 100
+                yoy_data.append({"연도": "2027E", "영업이익(억)": round(op27), "YoY (%)": f"+{yoy_27:.1f}%" if yoy_27 > 0 else f"{yoy_27:.1f}%"})
                 
             if yoy_data:
                 st.dataframe(pd.DataFrame(yoy_data), use_container_width=True)
@@ -137,25 +171,33 @@ with col_yoy:
 st.divider()
 
 # --- 3. 증권사별 미래 컨센서스 비교 ---
-st.subheader("🏢 증권사별 리포트 컨센서스 (목표주가 및 미래 실적)")
 if not df_brokers.empty:
-    avg_row = pd.DataFrame([{
-        'broker': '평균 (Average)',
-        'tp': df_brokers['tp'].mean(),
-        'op_26': df_brokers['op_26'].mean(),
-        'np_26': df_brokers['np_26'].mean(),
-        'op_27': df_brokers['op_27'].mean(),
-        'np_27': df_brokers['np_27'].mean(),
-        'date': '-'
-    }])
-    df_disp = pd.concat([df_brokers, avg_row], ignore_index=True)
+    n_brokers = len(df_brokers)
+    title_text = f"🏢 증권사별 리포트 컨센서스 (최근 공개 추정치, N={n_brokers})" if n_brokers == 1 else f"🏢 증권사별 리포트 컨센서스 (단순 평균, N={n_brokers})"
+    st.subheader(title_text)
+    
+    if n_brokers > 1:
+        avg_row = pd.DataFrame([{
+            'broker': '평균 (Average)',
+            'tp': df_brokers['tp'].mean(),
+            'op_26': df_brokers['op_26'].mean(),
+            'np_26': df_brokers['np_26'].mean(),
+            'op_27': df_brokers['op_27'].mean(),
+            'np_27': df_brokers['np_27'].mean(),
+            'date': '-'
+        }])
+        df_disp = pd.concat([df_brokers, avg_row], ignore_index=True)
+    else:
+        df_disp = df_brokers.copy()
+        
     df_disp.columns = ['증권사', '목표주가(원)', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익', '업데이트 일자']
     
     for col in ['목표주가(원)', '26E 영업이익', '26E 순이익', '27E 영업이익', '27E 순이익']:
-        df_disp[col] = df_disp[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "N/A")
+        df_disp[col] = df_disp[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
         
     st.dataframe(df_disp, use_container_width=True)
 else:
+    st.subheader("🏢 증권사별 리포트 컨센서스")
     st.info("수집된 증권사 리포트가 없습니다.")
 
 st.divider()
@@ -241,8 +283,8 @@ def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
     fig.update_layout(title="Historical PBR Band (12M Fwd BPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
     return fig
 
-# --- 4. Historical PER / PBR / POR Band Charts ---
-st.subheader("📈 Historical Valuation 밴드 차트 & Z-Score (12M FWD, 3년)")
+# --- 4. Forward EPS 기반 고정 PER별 적정주가 밴드 ---
+st.subheader("📈 Forward EPS 기반 고정 PER/PBR 적정주가 밴드 & Z-Score (12M FWD, 최근 3년)")
 df_prices = get_daily_prices(ticker, years=3)
 
 if not df_prices.empty and not df_financials.empty:
@@ -299,9 +341,9 @@ if ticker == '425420':
     * **근거**: 26.2Q 역대급 원재료 매입액(172.5억)에 과거 평균 매출 전환율(2.61배)을 곱하면 450억원이 산출되나, 재고자산 증가(QoQ +35.8%)를 보수적으로 감안하여 하향 조정한 수치입니다. (Board 매출의 폭발적 증가 예상)
 
     #### 3. 🚀 2027년 EPS 전망 및 SOCAMM·CPO 업사이드
-    현재 시장 컨센서스(2027년 EPS 3,660원)는 보수적입니다. 마이크론향 SOCAMM 및 광통신(CPO) 테스트 소켓 매출이 가시화될 경우 EPS 상향이 기대됩니다.
-    * **Base 시나리오 (+8.7% 업사이드)**: 신사업 매출 200억 추가 ➡️ **조정 EPS 3,977원**
-    * **Bull 시나리오 (+20.8% 업사이드)**: 신사업 매출 400억 추가 ➡️ **조정 EPS 4,422원**
+    현재 컨센서스(2027E EPS 3,660원)는 추정 기관 수가 적어 신사업 가정에 매우 민감합니다. 만약 해당 컨센서스에 아직 미반영된 마이크론향 SOCAMM 및 광통신(CPO) 테스트 소켓 매출 순증을 가정할 경우, EPS 추가 상향 시나리오는 다음과 같습니다.
+    * **Base 시나리오 (+8.7% 업사이드)**: 기존 사업 실적 + 신사업 순증 200억 추가 ➡️ **조정 EPS 3,977원**
+    * **Bull 시나리오 (+20.8% 업사이드)**: 기존 사업 실적 + 신사업 순증 400억 추가 ➡️ **조정 EPS 4,422원**
     
     이 핵심 데이터들을 직접 추적하려면 매 분기 발표되는 **[전자공시시스템(DART) - 분기보고서 / 반기보고서 / 사업보고서]**를 열어보셔야 합니다.
     """)
@@ -368,6 +410,15 @@ if ticker == '425420':
             # Lag 반영 로직
             df_chart['Board_매출_Shifted'] = df_chart['board_rev'].shift(-1)
             
+            # 수학적 상관계수 검증 (NaN 제거)
+            df_board_corr = df_chart[['Board_매입', 'Board_매출_Shifted']].dropna()
+            r_board = df_board_corr.corr().iloc[0, 1] if not df_board_corr.empty else 0
+            n_board = len(df_board_corr)
+            
+            df_socket_corr = df_chart[['Socket_매입', 'socket_rev']].dropna()
+            r_socket = df_socket_corr.corr().iloc[0, 1] if not df_socket_corr.empty else 0
+            n_socket = len(df_socket_corr)
+            
             st.markdown("#### 🎯 제품별 매입-매출 선행지표 상관관계 분석")
             
             col1, col2 = st.columns(2)
@@ -375,18 +426,19 @@ if ticker == '425420':
             with col1:
                 # Board: +1Q Lag (매입이 1분기 선행)
                 fig1 = go.Figure()
-                fig1.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Board_매입'], name='Board 매입 (당분기)', line=dict(color='blue', width=3)))
-                fig1.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Board_매출_Shifted'], name='Board 매출 (+1Q 후행)', line=dict(color='red', width=3, dash='dot')))
-                fig1.update_layout(title="[+1분기 Lag] Board 매입 vs 다음분기 매출 상관관계", yaxis_title="금액 (백만원)")
+                fig1.add_trace(go.Scatter(x=df_board_corr['기간'], y=df_board_corr['Board_매입'], name='Board 매입 (당분기)', line=dict(color='blue', width=3)))
+                fig1.add_trace(go.Scatter(x=df_board_corr['기간'], y=df_board_corr['Board_매출_Shifted'], name='Board 매출 (+1Q 후행)', line=dict(color='red', width=3, dash='dot')))
+                fig1.update_layout(title=f"[+1분기 Lag] Board 매입 vs 다음분기 매출<br><sup>Pearson r = {r_board:.2f} (N={n_board})</sup>", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig1, use_container_width=True)
                 
             with col2:
                 # Socket: 0Q Lag (동행)
                 fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['Socket_매입'], name='Socket 매입 (당분기)', line=dict(color='purple', width=3)))
-                fig2.add_trace(go.Scatter(x=df_chart['기간'], y=df_chart['socket_rev'], name='Socket 매출 (당분기)', line=dict(color='orange', width=3, dash='dot')))
-                fig2.update_layout(title="[0분기 Lag] Socket 매입 vs 당분기 매출 상관관계", yaxis_title="금액 (백만원)")
+                fig2.add_trace(go.Scatter(x=df_socket_corr['기간'], y=df_socket_corr['Socket_매입'], name='Socket 매입 (당분기)', line=dict(color='purple', width=3)))
+                fig2.add_trace(go.Scatter(x=df_socket_corr['기간'], y=df_socket_corr['socket_rev'], name='Socket 매출 (당분기)', line=dict(color='orange', width=3, dash='dot')))
+                fig2.update_layout(title=f"[0분기 Lag] Socket 매입 vs 당분기 매출<br><sup>Pearson r = {r_socket:.2f} (N={n_socket})</sup>", yaxis_title="금액 (백만원)")
                 st.plotly_chart(fig2, use_container_width=True)
+                st.caption("⚠️ [주의] 2025년 이전 Socket 매출은 별도재무제표 기준, 이후는 연결 기준이 혼합되어 있어 상관관계가 과장될 수 있습니다.")
                 
             st.info("💡 위 데이터는 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 AI(Gemini)가 스크래핑하여 단일 분기로 자동 환산합니다.")
     except Exception as e:
