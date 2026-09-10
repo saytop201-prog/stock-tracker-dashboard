@@ -238,12 +238,46 @@ if ticker == '425420':
     try:
         import sqlite3
         conn = sqlite3.connect('tracking.db')
-        df_dart = pd.read_sql_query("SELECT report_nm as '보고서명', board_parts_krw as 'Board Parts (당기누적, 백만)', pcb_krw as 'PCB (당기누적, 백만)', socket_krw as 'Socket (당기누적, 백만)', samsung_rev as '삼성전자 매출 (당기누적, 백만)', other_rev as '기타 매출 (당기누적, 백만)' FROM tfe_dart ORDER BY report_nm ASC", conn)
+        df_dart_raw = pd.read_sql_query("SELECT rcept_no, report_nm, board_parts_krw, pcb_krw, socket_krw, samsung_rev, other_rev FROM tfe_dart ORDER BY rcept_no ASC", conn)
         conn.close()
         
-        if not df_dart.empty:
-            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹")
-            st.dataframe(df_dart, use_container_width=True)
+        if not df_dart_raw.empty:
+            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹 (누적 기준)")
+            
+            def get_period_label(name):
+                if '03)' in name: return name[-8:-3] + ' 1Q'
+                if '06)' in name: return name[-8:-3] + ' 1H'
+                if '09)' in name: return name[-8:-3] + ' 3Q누적'
+                if '12)' in name: return name[-8:-3] + ' 연간'
+                return name
+            
+            df_dart_raw['기간'] = df_dart_raw['report_nm'].apply(get_period_label)
+            
+            df_table = df_dart_raw[['기간', 'board_parts_krw', 'pcb_krw', 'socket_krw', 'samsung_rev', 'other_rev']].copy()
+            df_table.columns = ['기간', 'Board Parts 매입(백만)', 'PCB 매입(백만)', 'Socket 매입(백만)', '삼성전자 매출(백만)', '기타 매출(백만)']
+            
+            for col in df_table.columns[1:]:
+                df_table[col] = df_table[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-")
+                
+            st.dataframe(df_table, use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig1 = go.Figure()
+                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['board_parts_krw'], name='Board Parts'))
+                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['pcb_krw'], name='PCB'))
+                fig1.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['socket_krw'], name='Socket'))
+                fig1.update_layout(title="원재료 누적 매입액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                st.plotly_chart(fig1, use_container_width=True)
+                
+            with col2:
+                fig2 = go.Figure()
+                fig2.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['samsung_rev'], name='삼성전자'))
+                fig2.add_trace(go.Bar(x=df_dart_raw['기간'], y=df_dart_raw['other_rev'], name='기타 고객사'))
+                fig2.update_layout(title="고객사별 누적 매출액 추이", barmode='group', yaxis_title="금액 (백만원)")
+                st.plotly_chart(fig2, use_container_width=True)
+                
             st.info("💡 위 데이터는 DART API와 AI(Gemini)를 통해 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 스크래핑하여 자동으로 누적됩니다.")
     except Exception as e:
-        pass
+        st.error(f"DART 표 렌더링 중 에러: {e}")
