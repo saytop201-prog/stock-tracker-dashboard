@@ -391,12 +391,12 @@ if ticker == '425420':
             df_chart['Board_매출_Shifted'] = df_chart['board_rev'].shift(-1)
             
             # 수학적 상관계수 검증 (NaN 제거)
-            df_board_corr = df_chart[['Board_매입', 'Board_매출_Shifted']].dropna()
-            r_board = df_board_corr.corr().iloc[0, 1] if not df_board_corr.empty else 0
+            df_board_corr = df_chart[['기간', 'Board_매입', 'Board_매출_Shifted']].dropna()
+            r_board = df_board_corr['Board_매입'].corr(df_board_corr['Board_매출_Shifted']) if not df_board_corr.empty else 0
             n_board = len(df_board_corr)
             
-            df_socket_corr = df_chart[['Socket_매입', 'socket_rev']].dropna()
-            r_socket = df_socket_corr.corr().iloc[0, 1] if not df_socket_corr.empty else 0
+            df_socket_corr = df_chart[['기간', 'Socket_매입', 'socket_rev']].dropna()
+            r_socket = df_socket_corr['Socket_매입'].corr(df_socket_corr['socket_rev']) if not df_socket_corr.empty else 0
             n_socket = len(df_socket_corr)
             
             st.markdown("#### 🎯 제품별 매입-매출 선행지표 상관관계 분석")
