@@ -160,7 +160,7 @@ else:
 
 st.divider()
 
-def get_historical_metrics(df_price, df_fin):
+def get_historical_metrics(df_price, df_fin, forward_12m=True):
     eps_series = pd.Series(index=df_price.index, dtype=float)
     bps_series = pd.Series(index=df_price.index, dtype=float)
     
@@ -179,19 +179,42 @@ def get_historical_metrics(df_price, df_fin):
                 
     for date in df_price.index:
         y_str = str(date.year)
-        if y_str in year_eps and pd.notnull(year_eps[y_str]):
-            eps_series[date] = year_eps[y_str]
-        else:
-            prev_y = str(date.year - 1)
-            if prev_y in year_eps and pd.notnull(year_eps[prev_y]):
-                eps_series[date] = year_eps[prev_y]
+        next_y_str = str(date.year + 1)
+        month = date.month
+        
+        cur_eps = year_eps.get(y_str)
+        cur_bps = year_bps.get(y_str)
+        next_eps = year_eps.get(next_y_str)
+        next_bps = year_bps.get(next_y_str)
+        
+        # 12M FWD 계산 (월별 가중 평균)
+        if forward_12m:
+            w_cur = (13 - month) / 12.0
+            w_next = (month - 1) / 12.0
+            
+            if pd.notnull(cur_eps) and pd.notnull(next_eps):
+                eps_series[date] = (cur_eps * w_cur) + (next_eps * w_next)
+            elif pd.notnull(cur_eps):
+                eps_series[date] = cur_eps
+            elif pd.notnull(year_eps.get(str(date.year - 1))):
+                eps_series[date] = year_eps.get(str(date.year - 1))
                 
-        if y_str in year_bps and pd.notnull(year_bps[y_str]):
-            bps_series[date] = year_bps[y_str]
+            if pd.notnull(cur_bps) and pd.notnull(next_bps):
+                bps_series[date] = (cur_bps * w_cur) + (next_bps * w_next)
+            elif pd.notnull(cur_bps):
+                bps_series[date] = cur_bps
+            elif pd.notnull(year_bps.get(str(date.year - 1))):
+                bps_series[date] = year_bps.get(str(date.year - 1))
         else:
-            prev_y = str(date.year - 1)
-            if prev_y in year_bps and pd.notnull(year_bps[prev_y]):
-                bps_series[date] = year_bps[prev_y]
+            if pd.notnull(cur_eps):
+                eps_series[date] = cur_eps
+            elif pd.notnull(year_eps.get(str(date.year - 1))):
+                eps_series[date] = year_eps.get(str(date.year - 1))
+                
+            if pd.notnull(cur_bps):
+                bps_series[date] = cur_bps
+            elif pd.notnull(year_bps.get(str(date.year - 1))):
+                bps_series[date] = year_bps.get(str(date.year - 1))
                 
     eps_series.ffill(inplace=True)
     bps_series.ffill(inplace=True)
@@ -206,7 +229,7 @@ def plot_per_band(df, eps_series, per_multiples=[10, 15, 20, 25, 30]):
     colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
     for per, color in zip(per_multiples, colors):
         fig.add_trace(go.Scatter(x=df.index, y=eps_series * per, name=f'{per}x', line=dict(color=color, dash='dash')))
-    fig.update_layout(title="Historical PER Band (Trailing EPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
+    fig.update_layout(title="Historical PER Band (12M Fwd EPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
     return fig
 
 def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
@@ -215,11 +238,11 @@ def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
     colors = ['#FF9999', '#FFCC99', '#FFFF99', '#CCFF99', '#99FF99']
     for pbr, color in zip(pbr_multiples, colors):
         fig.add_trace(go.Scatter(x=df.index, y=bps_series * pbr, name=f'{pbr}x', line=dict(color=color, dash='dash')))
-    fig.update_layout(title="Historical PBR Band (Trailing BPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
+    fig.update_layout(title="Historical PBR Band (12M Fwd BPS 기준)", xaxis_title="날짜", yaxis_title="주가 (원)")
     return fig
 
 # --- 4. Historical PER / PBR / POR Band Charts ---
-st.subheader("📈 Historical Valuation 밴드 차트 & Z-Score (3년)")
+st.subheader("📈 Historical Valuation 밴드 차트 & Z-Score (12M FWD, 3년)")
 df_prices = get_daily_prices(ticker, years=3)
 
 if not df_prices.empty and not df_financials.empty:
