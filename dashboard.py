@@ -22,9 +22,10 @@ st.set_page_config(page_title="소부장 트래킹 대시보드", layout="wide")
 
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "0000": 
+        if st.session_state.get("password", "") == "0000": 
             st.session_state["password_correct"] = True
-            del st.session_state["password"] 
+            if "password" in st.session_state:
+                del st.session_state["password"] 
         else:
             st.session_state["password_correct"] = False
 
