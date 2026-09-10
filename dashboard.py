@@ -234,3 +234,16 @@ if ticker == '425420':
     1. **고객사 비중 트래킹**: `II. 사업의 내용` -> `4. 매출 및 수주상황` 하단의 **[주요 고객사별 매출 현황]** 표 확인 (삼성전자 및 기타(마이크론 추정) 매출액의 전분기 대비 증감률 계산)
     2. **원재료 선행지표 트래킹**: `II. 사업의 내용` -> `3. 원재료 및 생산설비` -> **[원재료 매입 현황]** 표 확인 (SOCKET, BOARD PARTS, PCB 등 품목별 당기 매입액이 평소 대비 급증했는지 확인)
     """)
+    
+    try:
+        import sqlite3
+        conn = sqlite3.connect('tracking.db')
+        df_dart = pd.read_sql_query("SELECT report_nm as '보고서명', board_parts_krw as 'Board Parts (당기누적, 백만)', pcb_krw as 'PCB (당기누적, 백만)', socket_krw as 'Socket (당기누적, 백만)', samsung_rev as '삼성전자 매출 (당기누적, 백만)', other_rev as '기타 매출 (당기누적, 백만)' FROM tfe_dart ORDER BY report_nm ASC", conn)
+        conn.close()
+        
+        if not df_dart.empty:
+            st.markdown("#### 📊 [자동 업데이트] 전자공시 원재료 및 고객사 매출 트래킹")
+            st.dataframe(df_dart, use_container_width=True)
+            st.info("💡 위 데이터는 DART API와 AI(Gemini)를 통해 매일 아침 6시 최신 분기/사업보고서의 '사업의 내용'을 스크래핑하여 자동으로 누적됩니다.")
+    except Exception as e:
+        pass
