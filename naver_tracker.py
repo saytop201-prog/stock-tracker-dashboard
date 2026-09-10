@@ -55,14 +55,14 @@ def extract_text_from_pdf(pdf_path):
 
 def get_estimates(company, text):
     text_snippet = text[:35000]
-    prompt = f"[{company}] 종목 리포트입니다. 2026년과 2027년 예상 실적(컨센서스)을 찾아주세요. 단위는 억원입니다. 찾을 수 없는 데이터는 null로 처리. 반드시 JSON 포맷 출력: {{\n\"2026_op\": 숫자,\n\"2026_np\": 숫자,\n\"2027_op\": 숫자,\n\"2027_np\": 숫자\n}}\n[리포트]\n{text_snippet}"
+    prompt = f"[{company}] 종목 리포트입니다. 리포트를 발행한 증권사명과, 2026년/2027년 예상 실적(컨센서스)을 찾아주세요. 단위는 억원입니다. 찾을 수 없는 데이터는 null로 처리. 반드시 JSON 포맷 출력: {{\n\"broker\": \"증권사명\",\n\"2026_op\": 숫자,\n\"2026_np\": 숫자,\n\"2027_op\": 숫자,\n\"2027_np\": 숫자\n}}\n[리포트]\n{text_snippet}"
     try:
         response = model.generate_content(prompt)
         res_text = response.text.strip().replace('```json', '').replace('```', '')
         return json.loads(res_text)
     except Exception as e:
         print(f"Gemini 에러: {e}")
-        return {"2026_op": None, "2026_np": None, "2027_op": None, "2027_np": None}
+        return {"broker": "Unknown", "2026_op": None, "2026_np": None, "2027_op": None, "2027_np": None}
 
 def get_mcap(ticker):
     try:
@@ -106,11 +106,13 @@ def main():
             est = get_estimates(company, text)
             mcap = get_mcap(ticker)
             
+            broker = est.get('broker', 'Unknown')
             op26, np26 = est.get('2026_op'), est.get('2026_np')
             op27, np27 = est.get('2027_op'), est.get('2027_np')
             
             db_manager.insert_estimate(
                 date=datetime.today().strftime("%Y-%m-%d"),
+                broker=broker,
                 company=company,
                 ticker=ticker,
                 market_cap=mcap,
@@ -119,7 +121,7 @@ def main():
                 op_27=op27,
                 np_27=np27
             )
-            print(f"  -> 완료 (26E OP: {op26}, 27E OP: {op27})", flush=True)
+            print(f"  -> 완료 [{broker}] (26E OP: {op26}, 27E OP: {op27})", flush=True)
         except Exception as e:
             print(f"  -> 에러 발생: {e}", flush=True)
             

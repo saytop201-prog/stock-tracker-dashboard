@@ -39,13 +39,14 @@ def extract_text_from_pdf(pdf_path):
 
 def get_estimates(company, text):
     text_snippet = text[:35000]
-    prompt = f"[{company}] 리포트입니다. 2026년과 2027년의 예상 실적(컨센서스)을 찾아주세요. 단위는 억원입니다. 찾을 수 없는 데이터는 null로 처리하세요. 반드시 JSON 포맷으로 출력: {{\n\"2026_op\": 숫자,\n\"2026_np\": 숫자,\n\"2027_op\": 숫자,\n\"2027_np\": 숫자\n}}\n[리포트]\n{text_snippet}"
+    prompt = f"[{company}] 종목 리포트입니다. 리포트를 발행한 증권사명과, 2026년/2027년 예상 실적(컨센서스)을 찾아주세요. 단위는 억원입니다. 찾을 수 없는 데이터는 null로 처리. 반드시 JSON 포맷 출력: {{\n\"broker\": \"증권사명\",\n\"2026_op\": 숫자,\n\"2026_np\": 숫자,\n\"2027_op\": 숫자,\n\"2027_np\": 숫자\n}}\n[리포트]\n{text_snippet}"
     try:
         response = model.generate_content(prompt)
         res_text = response.text.strip().replace('```json', '').replace('```', '')
         return json.loads(res_text)
-    except:
-        return {"2026_op": None, "2026_np": None, "2027_op": None, "2027_np": None}
+    except Exception as e:
+        print(f"Gemini 에러: {e}")
+        return {"broker": "Unknown", "2026_op": None, "2026_np": None, "2027_op": None, "2027_np": None}
 
 def get_mcap(ticker):
     try:
@@ -100,19 +101,24 @@ async def main():
             
             op26, np26 = est.get('2026_op'), est.get('2026_np')
             op27, np27 = est.get('2027_op'), est.get('2027_np')
+            msg_date = message.date
             
             results.append({
+                'broker': est.get('broker', 'Unknown'),
                 '종목명': found_company, '종목코드': ticker, '시가총액(억)': mcap,
                 '26E OP(억)': op26, '26E NP(억)': np26,
                 '27E OP(억)': op27, '27E NP(억)': np27,
+                '업데이트 날짜': msg_date.strftime("%Y-%m-%d")
             })
             
     if results:
         import db_manager
         db_manager.init_db()
         for r in results:
+            broker = r.get('broker', 'Unknown')
             db_manager.insert_estimate(
                 date=r['업데이트 날짜'],
+                broker=broker,
                 company=r['종목명'],
                 ticker=r['종목코드'],
                 market_cap=r['시가총액(억)'],
