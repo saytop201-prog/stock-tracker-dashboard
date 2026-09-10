@@ -15,7 +15,7 @@ PHONE_NUMBER = '+821036092062'
 TELEGRAM_CHANNEL = 'sunstudy1234'
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 TARGET_STOCKS = {
     '마이크로컨텍솔': '098120', '티에스이': '131290', '티에프이': '425420', 'ISC': '095340',
@@ -48,11 +48,26 @@ def get_estimates(company, text):
         return {"2026_op": None, "2026_np": None, "2027_op": None, "2027_np": None}
 
 def get_mcap(ticker):
-    today = datetime.today().strftime("%Y%m%d")
-    df = stock.get_market_cap(today, today, ticker)
-    if not df.empty:
-        return int(df['시가총액'].iloc[0] / 100000000)
-    return None
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        url = f"https://finance.naver.com/item/main.naver?code={ticker}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        mcap_em = soup.select_one('#_market_sum')
+        if mcap_em:
+            mcap_str = mcap_em.text.replace(',', '').replace('\t', '').replace('\n', '').strip()
+            if '조' in mcap_str:
+                parts = mcap_str.split('조')
+                tril = int(parts[0].strip())
+                bil = int(parts[1].strip()) if len(parts)>1 and parts[1].strip() else 0
+                return tril * 10000 + bil
+            else:
+                return int(mcap_str.strip())
+        return None
+    except:
+        return None
 
 async def main():
     print("텔레그램 클라이언트 시작 중... (인증 번호를 입력 대기 상태가 됩니다)", flush=True)
