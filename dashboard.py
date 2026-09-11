@@ -114,7 +114,7 @@ def parse_telegram_pdfs(company_name):
             if date_str != 'N/A':
                 date_str = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}'
                 
-            tp = None
+            tp, cp = None, None
             path = os.path.join(folder, filename)
             try:
                 reader = PyPDF2.PdfReader(path)
@@ -126,19 +126,17 @@ def parse_telegram_pdfs(company_name):
                 
                 for i, line in enumerate(lines):
                     clean_line = line.replace(' ', '')
-                    if '목표주가' in clean_line:
-                        match = re.search(r'([\d,]+)\s*원', line)
-                        if match:
-                            tp = int(match.group(1).replace(',', ''))
-                        else:
-                            for j in range(1, 4):
-                                if i+j < len(lines):
-                                    match = re.search(r'([\d,]+)', lines[i+j].replace(',', ''))
-                                    if match and int(match.group(1)) > 1000:
-                                        tp = int(match.group(1))
-                                        break
-                        if tp:
-                            break
+                    if '목표주가' in clean_line and not tp:
+                        match = re.search(r'([1-9][0-9,]{2,})', line)
+                        if not match and i+1 < len(lines):
+                            match = re.search(r'([1-9][0-9,]{2,})', lines[i+1])
+                        if match: tp = int(match.group(1).replace(',', ''))
+                        
+                    if ('현재주가' in clean_line or '현재가' in clean_line) and not cp:
+                        match = re.search(r'([1-9][0-9,]{2,})', line.split(')')[-1])
+                        if not match and i+1 < len(lines):
+                            match = re.search(r'([1-9][0-9,]{2,})', lines[i+1])
+                        if match: cp = int(match.group(1).replace(',', ''))
             except:
                 pass
                 
@@ -146,7 +144,8 @@ def parse_telegram_pdfs(company_name):
                 records.append({
                     '파일명': filename,
                     '발간일': date_str,
-                    '목표주가': tp
+                    '목표주가': tp,
+                    '당시주가': cp
                 })
     except:
         pass
@@ -291,11 +290,16 @@ df_tele = parse_telegram_pdfs(selected_company)
 if not df_tele.empty:
     st.subheader(f"📂 텔레그램 리포트 마이닝: 목표주가(TP) 트렌드 ({selected_company})")
     
-    # 목표주가 선차트
     import plotly.express as px
-    fig_tp = px.line(df_tele, x='발간일', y='목표주가', markers=True, text='목표주가', title=f"{selected_company} 증권사 목표주가 시계열 추적 (PDF 마이닝)")
-    fig_tp.update_traces(textposition="top center", line=dict(width=3, color='royalblue'), marker=dict(size=10, color='red'))
-    fig_tp.update_layout(yaxis_title="목표주가(원)", xaxis_title="발간일")
+    import plotly.graph_objects as go
+    
+    fig_tp = go.Figure()
+    fig_tp.add_trace(go.Scatter(x=df_tele['발간일'], y=df_tele['목표주가'], mode='lines+markers+text', text=df_tele['목표주가'], textposition="top center", name='목표주가', line=dict(width=3, color='royalblue'), marker=dict(size=10, color='red')))
+    
+    if '당시주가' in df_tele.columns:
+        fig_tp.add_trace(go.Scatter(x=df_tele['발간일'], y=df_tele['당시주가'], mode='lines+markers+text', text=df_tele['당시주가'], textposition="bottom center", name='당시주가', line=dict(width=2, color='gray', dash='dot'), marker=dict(size=8, color='gray')))
+    
+    fig_tp.update_layout(title=f"{selected_company} 증권사 목표주가 시계열 추적 (PDF 마이닝)", yaxis_title="주가(원)", xaxis_title="발간일")
     st.plotly_chart(fig_tp, use_container_width=True)
     
     # 상세 데이터 테이블
@@ -391,7 +395,14 @@ def plot_pbr_band(df, bps_series, pbr_multiples=[1, 2, 3, 4, 5]):
 
 # --- 4. Forward EPS 기반 고정 PER/PBR 적정주가 밴드 ---
 st.subheader("📈 Forward EPS 기반 고정 PER/PBR 적정주가 밴드 & Z-Score (12M FWD, 최근 3년)")
-st.warning("⚠️ Valuation confidence: Low to Medium | 사유: 컨센서스 N=2, 선행 Multiple 이력 약 1년")
+
+if ticker == '425420':
+    st.warning("⚠️ Valuation confidence: Low to Medium | 사유: 신규 상장/증설로 인한 선행 Multiple 이력 부족 (약 1년)")
+elif ticker == '000990':
+    st.success(f"✅ Valuation confidence: High | 사유: 긴 업력과 충분한 컨센서스 데이터 (N={n_brokers if 'n_brokers' in locals() else '다수'}) 확보됨")
+else:
+    st.info(f"ℹ️ Valuation confidence: Medium | 사유: 현재 확보된 컨센서스 N={n_brokers if 'n_brokers' in locals() else 0}")
+
 
 df_prices = get_daily_prices(ticker, years=3)
 
